@@ -290,12 +290,33 @@ function urlFor(tool: CatalogTool): string {
  * argument on this surface (`unreadOnly: false` is the default; `minPrice: 0` filters nothing)
  * and is the behaviour the hand-written nodes already had. A required argument is emitted bare.
  */
+/**
+ * An ARRAY argument, made into an array whatever shape the model sent (2026-11-08).
+ *
+ * `$fromAI` takes three types and an array is not one of them (`fromAiType` → `'string'`), so the
+ * model is told the argument is a string and may send `"id1,id2"` or `'["id1","id2"]'`, while every
+ * backend schema behind such an argument is `z.array(...)`, which refuses a string with a 400.
+ * Kept to arguments the catalogue types as `array`, so no other argument's expression changes. An
+ * array passes through unchanged; a JSON array string is parsed; anything else is split on commas,
+ * semicolons and spaces. An empty value becomes `undefined`, so an optional argument stays absent.
+ * ⚠ No backslash anywhere in this text: it does not survive the trip into a node body.
+ */
+export function listArgument(call: string): string {
+    return '(function (v) { if (Array.isArray(v)) return v; if (v == null || v === "") return undefined; '
+        + 'var s = String(v).trim(); if (s.charAt(0) === "[") { try { var a = JSON.parse(s); if (Array.isArray(a)) return a; } catch (e) {} } '
+        + 'var parts = s.split(/[ ,;]+/).filter(function (x) { return x !== ""; }); return parts.length ? parts : undefined; })'
+        + `(${call})`;
+}
+
 function jsonExpression(tool: CatalogTool, params: string[], includeIdentity: boolean): string {
     const required = new Set(tool.parameters.required ?? []);
     const fields = includeIdentity ? [`identity: ${FLOW_IDENTITY}`] : [];
     for (const param of params) {
         if (NEVER_MODEL_FACING_PARAMS.has(param)) continue;
-        const call = fromAi(param, schemaFor(tool, param));
+        const schema = schemaFor(tool, param);
+        const type = Array.isArray(schema.type) ? schema.type[0] : schema.type;
+        const raw = fromAi(param, schema);
+        const call = type === 'array' ? listArgument(raw) : raw;
         fields.push(`${param}: ${required.has(param) ? call : `${call} || undefined`}`);
     }
     return `={{ JSON.stringify({ ${fields.join(', ')} }) }}`;

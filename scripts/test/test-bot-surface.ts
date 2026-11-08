@@ -327,6 +327,7 @@ import {
     FLOW_IDENTITY,
     HTTP_TOOL_TYPE,
     isModelFacing,
+    listArgument,
     NEVER_MODEL_FACING_PARAMS,
     readCatalog,
     renderOperations,
@@ -3424,6 +3425,24 @@ async function main(): Promise<void> {
     const mcpCatalog = readCatalog();
     const emitted = selectMcpTools(mcpCatalog);
     const emittedNames = new Set(emitted.map((t) => t.name));
+
+    // An ARRAY argument reaches a `z.array` schema whatever shape the model sent (2026-11-08):
+    // `$fromAI` has no array type, so the model is told it is a string.
+    {
+        const coerce = new Function("v", "return " + listArgument("v") + ";") as (v: unknown) => unknown;
+        const ids = ["aaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbb"];
+        assert("an array argument becomes an array: real array, JSON text, commas, spaces, one id", () =>
+            [ids, JSON.stringify(ids), ids.join(","), ids.join(", "), ids.join(" ")]
+                .every((v) => JSON.stringify(coerce(v)) === JSON.stringify(ids))
+            && JSON.stringify(coerce(ids[0])) === JSON.stringify([ids[0]]));
+        assert("an empty array argument stays ABSENT (undefined), so an optional one is dropped", () =>
+            coerce("") === undefined && coerce(null) === undefined && coerce(undefined) === undefined);
+        assert("⚠ the coercion carries no backslash (it does not survive the trip into a node body)", () =>
+            !listArgument("x").includes(String.fromCharCode(92)));
+        const listingsDisplay = buildNodes(emitted).find((n) => n.name === "listings_display");
+        assert("listings_display sends listingIds through the coercion", () =>
+            !!listingsDisplay && String((listingsDisplay.parameters as Record<string, unknown>).jsonBody).includes("listingIds: (function (v)"));
+    }
 
     /**
      * ⛔ **THE assertion this group exists for.**

@@ -2,11 +2,11 @@
   [
     {
       "type": "updateNodeParameters",
-      "nodeName": "checkout_place",
+      "nodeName": "combined_delivery_request",
       "parameters": {
-        "toolDescription": "Spends the checkoutRef: creates the orders (prices re-resolved, agreed price locks honoured) and sends a mobile-money prompt to the account's wallet; the result arrives later in the chat. ⚠ On success THIS TOOL SENDS THE CUSTOMER the order numbers and payment instructions with a Check status button — or, if the charge was refused at once (state failed), that no money was taken, with Try again. Do not repeat any of it. USE IT WHEN: Only right after checkout_review returned ready: true AND the customer explicitly confirmed its total, address and masked number in words. NOT THIS TOOL: Never without that confirmation, never twice, never with an invented checkoutRef, never after they tapped Place order (that already placed it). If customer.pendingQuestion.context is 'co', use chat_answer_question instead. Pass deliveryAddressId = the review's delivery.address.id (required for physical goods); pass phone only if the customer typed a different number. On an error whose details.spent is not false, do NOT place again — use checkout_payment_status. ⚠ state 'failed': the orders exist but NO prompt is coming — say so and offer checkout_retry_payment. state 'waiting': tell them to approve on their phone; the result arrives as a message.",
+        "toolDescription": "Ask one delivery company for a combined (lower) price on several of the customer's parcels from one checkout. The company answers later, by lowering fees or declining; fees can never go up from this. The platform words the confirmation — relay the reply. USE IT WHEN: After combined_delivery_eligible, once the customer confirmed which group (company) they want to ask. NOT THIS TOOL: Never with ids that did not come from combined_delivery_eligible. Not when that group already has an openRequestId.",
         "method": "POST",
-        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/checkout/chat/place",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/delivery-fees/combined",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpBearerAuth",
         "sendHeaders": true,
@@ -18,13 +18,13 @@
             },
             {
               "name": "Idempotency-Key",
-              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-checkout_place"
+              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-combined_delivery_request"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, checkoutRef: $fromAI(\"checkoutRef\", \"Exactly as checkout_review returned it. Single use, ten minutes.\", \"string\"), deliveryAddressId: $fromAI(\"deliveryAddressId\", \"The delivery.address.id from the review. Required for physical goods; omit for downloads. A 24-character hexadecimal id.\", \"string\") || undefined, phone: $fromAI(\"phone\", \"Only a mobile-money number the customer typed, exactly as they typed it (the country code is optional: without one, the account's own country is used). Omit to use the account's.\", \"string\") || undefined, deliveryFeePayment: $fromAI(\"deliveryFeePayment\", \"Optional, default with_order. cash_to_rider ONLY when the review's payment.deliveryFeeCash was set and the customer chose to pay the delivery fee in cash to the rider: the items are charged now, the delivery fee is paid to the rider with a delivery code. One of: with_order, cash_to_rider.\", \"string\") || undefined, paymentCode: $fromAI(\"paymentCode\", \"Orange Money only, and only after a PAYMENT_CODE_REQUIRED refusal: the payment code the customer got by dialling details.ussd and typed back to you. Digits only. Never ask for it up front, never invent it, never repeat it back.\", \"string\") || undefined, partialAmount: $fromAI(\"partialAmount\", \"ONLY when the review's payment.partialPayment was set and the customer said how much they want to pay now: a whole number between its minimumAmount and maximumAmount. This is charged now and the rest is paid in cash at delivery. Never invent it. On PARTIAL_PAYMENT_AMOUNT_OUT_OF_RANGE (details.spent false), tell them the limits and ask again; nothing was spent.\", \"number\") || undefined }) }}",
+        "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, cartId: $fromAI(\"cartId\", \"groups[].cartId from combined_delivery_eligible, verbatim. A 24-character hexadecimal id.\", \"string\"), agencyId: $fromAI(\"agencyId\", \"groups[].agencyId from the SAME group, verbatim. A 24-character hexadecimal id.\", \"string\"), shipmentIds: (function (v) { if (Array.isArray(v)) return v; if (v == null || v === \"\") return undefined; var s = String(v).trim(); if (s.charAt(0) === \"[\") { try { var a = JSON.parse(s); if (Array.isArray(a)) return a; } catch (e) {} } var parts = s.split(/[ ,;]+/).filter(function (x) { return x !== \"\"; }); return parts.length ? parts : undefined; })($fromAI(\"shipmentIds\", \"Optional: a subset of that group's shipments[].shipmentId (at least two). Omit for every parcel in the group.\", \"string\")) || undefined, note: $fromAI(\"note\", \"Optional: the customer's own words to the company. At most 500 characters.\", \"string\") || undefined }) }}",
         "options": {
           "response": {
             "response": {
@@ -38,11 +38,11 @@
     },
     {
       "type": "updateNodeParameters",
-      "nodeName": "checkout_retry_payment",
+      "nodeName": "inapp_open_listing",
       "parameters": {
-        "toolDescription": "Sends a fresh mobile-money charge for the still-unpaid orders of the most recent checkout, to the account's wallet or a number the customer typed. Creates no new order. USE IT WHEN: A checkout payment failed or was not approved and the customer agrees to try again. NOT THIS TOOL: Never for a new purchase (checkout_review), never while the last payment is still waiting (check checkout_payment_status first). Pass phone only if the customer typed a number.",
+        "toolDescription": "Opens a scrollable product grid — a category, a whole shop or their saved items — with picture, price and buy button on every card. Sends its own button. USE IT WHEN: The customer wants to BROWSE a whole shelf, or asks to see everything after a page of cards. NOT THIS TOOL: Not for a specific question with a short answer — five cards via Show-Products are better. Not for one product (inapp_open_product). ⚠ Never describe the button in your own words — the customer would read it twice.",
         "method": "POST",
-        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/checkout/retry-payment",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/listing",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpBearerAuth",
         "sendHeaders": true,
@@ -54,13 +54,13 @@
             },
             {
               "name": "Idempotency-Key",
-              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-checkout_retry_payment"
+              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-inapp_open_listing"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, phone: $fromAI(\"phone\", \"Only a number the customer typed, exactly as they typed it (the country code is optional: without one, the account's own country is used).\", \"string\") || undefined, paymentCode: $fromAI(\"paymentCode\", \"Orange Money only, and only after a PAYMENT_CODE_REQUIRED refusal: the payment code the customer got by dialling details.ussd and typed back to you. Digits only. Never ask for it up front, never invent it, never repeat it back.\", \"string\") || undefined, partialAmount: $fromAI(\"partialAmount\", \"Only on a checkout paid part online, and only when the customer named a different amount to pay now (for example their wallet was short). Omit to retry the same amount.\", \"number\") || undefined }) }}",
+        "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, q: $fromAI(\"q\", \"Free-text search. Omit to show everything. At most 120 characters.\", \"string\") || undefined, category: $fromAI(\"category\", \"Category slug or name, as the catalogue publishes it. At most 120 characters.\", \"string\") || undefined, storeSlug: $fromAI(\"storeSlug\", \"Narrow to one store. At most 160 characters.\", \"string\") || undefined, productIds: (function (v) { if (Array.isArray(v)) return v; if (v == null || v === \"\") return undefined; var s = String(v).trim(); if (s.charAt(0) === \"[\") { try { var a = JSON.parse(s); if (Array.isArray(a)) return a; } catch (e) {} } var parts = s.split(/[ ,;]+/).filter(function (x) { return x !== \"\"; }); return parts.length ? parts : undefined; })($fromAI(\"productIds\", \"Pin an exact set instead of filtering — for saved items, or a selection you chose yourself. Up to 50, far more than a chat can show.\", \"string\")) || undefined }) }}",
         "options": {
           "response": {
             "response": {
@@ -71,6 +71,108 @@
         }
       },
       "replace": true
+    },
+    {
+      "type": "addNode",
+      "node": {
+        "name": "listings_display",
+        "type": "n8n-nodes-base.httpRequestTool",
+        "typeVersion": 4.5,
+        "position": [
+          3800,
+          3560
+        ],
+        "parameters": {
+          "toolDescription": "Draws service-listing cards (plumbers, printers, repairers and other businesses paid in person, not through Wi-Mall) for listings a search returned with kind \"listing\". Each card shows what the business does, where (city and area) and one button per contact detail it has. The cards carry NO contact detail: a contact is unlocked only when the customer taps its button. USE IT WHEN: product_search returned results with kind \"listing\", or the customer asks for a tradesperson or service provider and you have listing ids. NOT THIS TOOL: Never state, guess or repeat a business's phone, WhatsApp, email, website, address or video: you do not have them, and only the customer's tap can unlock them. Not for products (kind \"product\"). The cards are sent for you, so your whole answer is [sent]. ⚠ One message per card with a list of contact buttons, sent for you. Your whole answer is [sent].",
+          "method": "POST",
+          "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/listings/display",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBearerAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-Webhook-Secret",
+                "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, listingIds: (function (v) { if (Array.isArray(v)) return v; if (v == null || v === \"\") return undefined; var s = String(v).trim(); if (s.charAt(0) === \"[\") { try { var a = JSON.parse(s); if (Array.isArray(a)) return a; } catch (e) {} } var parts = s.split(/[ ,;]+/).filter(function (x) { return x !== \"\"; }); return parts.length ? parts : undefined; })($fromAI(\"listingIds\", \"Listing ids from product_search (kind \\\"listing\\\"), in the order to show them.\", \"string\")) }) }}",
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true
+              }
+            },
+            "timeout": 20000
+          }
+        },
+        "credentials": {
+          "httpBearerAuth": {
+            "id": "lz5ivIop9DF8mPHa",
+            "name": "jovi-mall-Bearer Auth account"
+          }
+        }
+      }
+    },
+    {
+      "type": "addConnection",
+      "source": "listings_display",
+      "target": "AI Agent",
+      "connectionType": "ai_tool"
+    },
+    {
+      "type": "addNode",
+      "node": {
+        "name": "listings_get",
+        "type": "n8n-nodes-base.httpRequestTool",
+        "typeVersion": 4.5,
+        "position": [
+          4020,
+          3560
+        ],
+        "parameters": {
+          "toolDescription": "Draws ONE service-listing card with its full description and one button per contact detail the business has. Carries no contact detail. USE IT WHEN: The customer asks about one listing already shown (\"tell me more about the plumber\", \"what does the second one do?\"). NOT THIS TOOL: Never state a contact detail yourself (see listings_display). The card is sent for you, so your whole answer is [sent]. ⚠ A message with a list of contact buttons, sent for you.",
+          "method": "POST",
+          "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/listings/{{ encodeURIComponent(String($fromAI(\"listingId\", \"The listing id, from listings_display or product_search.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBearerAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-Webhook-Secret",
+                "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language } }) }}",
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true
+              }
+            },
+            "timeout": 20000
+          }
+        },
+        "credentials": {
+          "httpBearerAuth": {
+            "id": "lz5ivIop9DF8mPHa",
+            "name": "jovi-mall-Bearer Auth account"
+          }
+        }
+      }
+    },
+    {
+      "type": "addConnection",
+      "source": "listings_get",
+      "target": "AI Agent",
+      "connectionType": "ai_tool"
     }
   ]
 ]
