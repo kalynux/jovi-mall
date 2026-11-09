@@ -1,6 +1,7 @@
 import { storefrontUrl } from '../../../core/utils/storefront-link.util';
 import { GuideApp, GuideLanguage, GuideTopic, T as topic } from './website-guide-types';
 import { VENDOR_GUIDE } from './website-guide-vendor';
+import { PROVIDER_GUIDE } from './website-guide-provider';
 import { AGENCY_GUIDE } from './website-guide-agency';
 import { AGENT_GUIDE } from './website-guide-agent';
 import { REFERRAL_GUIDE_TOPICS } from '../../referrals/domain/referral-guide-topics';
@@ -358,22 +359,22 @@ export const SHOP_GUIDE: readonly GuideTopic[] = Object.freeze([
         signIn: false,
         copy: {
             en: {
-                title: 'Saved products (favourites) and recently viewed',
-                summary: 'See saved products and recently viewed ones',
+                title: 'Saved products and service businesses (favourites), and recently viewed',
+                summary: 'See saved products and businesses, and recently viewed products',
                 steps: [
-                    'Tap the heart on any product to save it.',
-                    'Open the "Saved" tab: "Saved" shows your favourites, "Recently viewed" what you looked at ("Clear history" empties it).',
+                    'Tap the heart on any product to save it. On a service business\'s page, tap "Save this business" ("Saved. The business isn’t told.").',
+                    'Open the "Saved" tab: "Saved" shows your favourites (with both kinds saved, "All", "Products" and "Services" filter them), "Recently viewed" what you looked at ("Clear history" empties it).',
                 ],
-                notes: ['Signed out, favourites stay on that device only; sign in to keep them on your account.'],
+                notes: ['Signed out, favourites stay on that device only; sign in to keep them on your account. Saving a business unlocks none of its contacts. Something no longer available says "This item is no longer available." and can be removed.'],
             },
             fr: {
-                title: 'Produits favoris et vus récemment',
-                summary: 'Voir les produits favoris et ceux vus récemment',
+                title: 'Produits et entreprises de services favoris, et vus récemment',
+                summary: 'Voir les produits et entreprises favoris, et les produits vus récemment',
                 steps: [
-                    'Appuyez sur le cœur d’un produit pour l’ajouter aux favoris.',
-                    'Ouvrez l’onglet « Favoris » : « Favoris » montre vos produits, « Vus récemment » ce que vous avez consulté (« Effacer l’historique » le vide).',
+                    'Appuyez sur le cœur d’un produit pour l’ajouter aux favoris. Sur la page d’une entreprise de services, appuyez sur « Enregistrer cette entreprise » (« Enregistré. L’entreprise n’en est pas informée. »).',
+                    'Ouvrez l’onglet « Favoris » : « Favoris » montre vos favoris (avec les deux sortes, « Tout », « Produits » et « Services » les filtrent), « Vus récemment » ce que vous avez consulté (« Effacer l’historique » le vide).',
                 ],
-                notes: ['Sans connexion, les favoris restent sur cet appareil ; connectez-vous pour les garder sur votre compte.'],
+                notes: ['Sans connexion, les favoris restent sur cet appareil ; connectez-vous pour les garder sur votre compte. Enregistrer une entreprise ne débloque aucun de ses contacts. Ce qui n’est plus disponible indique « Cet article n\'est plus disponible. » et peut être retiré.'],
             },
         },
     }),
@@ -937,6 +938,143 @@ export const SHOP_GUIDE: readonly GuideTopic[] = Object.freeze([
             },
         },
     }),
+
+    // ── Service listings, the customer side (2026-11-09, owner RS-4) ──────────
+    // Read from frontend/landing (production afd51d3): routes shop/listings, shop/listings/[slug],
+    // shop/account/business-messages, shop/saved, and messages/{en,fr}.json (shop.listings,
+    // shop.saved, shop.nav.titles.businessMessages). Labels are quoted.
+    T({
+        key: 'services',
+        app: 'shop',
+        path: '/shop/listings',
+        signIn: false,
+        copy: {
+            en: {
+                title: 'Finding a service business (plumber, printer, repairer…)',
+                summary: 'Find local businesses that work in person, and what their page shows',
+                steps: [
+                    'Search the shop as usual. Businesses that match appear in a "Service listings" row ("Contact them directly, for free."); "See all" opens every match.',
+                    'Each card shows the business, its city and neighbourhood, its stars when it has reviews, and which contacts it offers ("Contacts available").',
+                    'Open one: its page shows the photos, "About", "Opening hours", "Contact this business" and "Reviews".',
+                ],
+                notes: [
+                    'You agree on the service and its price with the business and pay it directly. Wi-Mall takes no payment and no order is created.',
+                    'Search matches whole words, so type a complete one ("plumber", not "plumb").',
+                ],
+            },
+            fr: {
+                title: 'Trouver une entreprise de services (plombier, imprimeur, réparateur…)',
+                summary: 'Trouver des entreprises locales qui travaillent sur place, et ce que montre leur page',
+                steps: [
+                    'Cherchez dans la boutique comme d’habitude. Les entreprises qui correspondent apparaissent dans une rangée « Annonces de service » (« Contactez-les directement, gratuitement. ») ; « Tout voir » ouvre tous les résultats.',
+                    'Chaque carte montre l’entreprise, sa ville et son quartier, ses étoiles quand elle a des avis, et les contacts qu’elle propose.',
+                    'Ouvrez-en une : sa page montre les photos, la présentation, les « Horaires d’ouverture », « Contacter cette entreprise » et les « Avis ».',
+                ],
+                notes: [
+                    'Vous convenez du service et de son prix avec l’entreprise et vous la payez directement. Wi-Mall n’encaisse rien et aucune commande n’est créée.',
+                    'La recherche porte sur des mots entiers : tapez un mot complet (« plombier », pas « plomb »).',
+                ],
+            },
+        },
+    }),
+    T({
+        key: 'servicecontact',
+        app: 'shop',
+        path: '/shop/listings',
+        signIn: false,
+        copy: {
+            en: {
+                title: 'Getting a service business\'s phone, WhatsApp or address',
+                summary: 'Unlock a business\'s contact for free, and choose whether it may message you',
+                steps: [
+                    'On the business\'s page, under "Contact this business", tap "Show" beside what you want: "WhatsApp", "Phone", "Email", "Website", "Social media", "Location" or "Directions video". Signed out, the button is "Sign in to contact".',
+                    'The contact appears with its action: "Chat on WhatsApp", "Call", "Send an email", "Open website", "Open in Maps", "Watch the video". A business may give two phone numbers; both appear, each with its own "Call".',
+                    'After your first unlock you are asked whether the business may send you messages through Wi-Mall: "Yes" or "No".',
+                ],
+                notes: [
+                    'Unlocking is free for you. "This business will see your first name and part of your number."',
+                    'You can change the "Yes" or "No" at any time (topic businessmessages).',
+                ],
+            },
+            fr: {
+                title: 'Obtenir le téléphone, le WhatsApp ou l’adresse d’une entreprise de services',
+                summary: 'Débloquer gratuitement un contact d’une entreprise, et choisir si elle peut vous écrire',
+                steps: [
+                    'Sur la page de l’entreprise, sous « Contacter cette entreprise », appuyez sur « Afficher » à côté de ce que vous voulez : « WhatsApp », « Téléphone », « E-mail », « Site web », « Réseaux sociaux », « Localisation » ou « Vidéo d’itinéraire ». Sans connexion, le bouton est « Connectez-vous pour contacter ».',
+                    'Le contact apparaît avec son action : « Discuter sur WhatsApp », « Appeler », « Envoyer un e-mail », « Ouvrir le site », « Ouvrir dans Maps », « Regarder la vidéo ». Une entreprise peut donner deux numéros ; les deux apparaissent, chacun avec son « Appeler ».',
+                    'Après votre premier déblocage, on vous demande si l’entreprise peut vous envoyer des messages via Wi-Mall : « Oui » ou « Non ».',
+                ],
+                notes: [
+                    'Le déblocage est gratuit pour vous. « Cette entreprise verra votre prénom et une partie de votre numéro. »',
+                    'Vous pouvez changer ce « Oui » ou « Non » à tout moment (sujet businessmessages).',
+                ],
+            },
+        },
+    }),
+    T({
+        key: 'businessmessages',
+        app: 'shop',
+        path: '/shop/account/business-messages',
+        signIn: true,
+        copy: {
+            en: {
+                title: 'Choosing which businesses may message you',
+                summary: 'Allow or stop messages from a service business whose contact you unlocked',
+                steps: [
+                    'Open Account → "Businesses that may message me".',
+                    'Every business whose contact you unlocked is listed with "Can message you" or "Can’t message you". Turn one on to allow it, off to stop it.',
+                ],
+                notes: [
+                    'A business you allow can send at most 3 messages in 30 days, one of them a request to call it. Every message has a "Stop these messages" link, and your replies go to the business\'s own WhatsApp.',
+                ],
+            },
+            fr: {
+                title: 'Choisir quelles entreprises peuvent vous écrire',
+                summary: 'Autoriser ou arrêter les messages d’une entreprise dont vous avez débloqué un contact',
+                steps: [
+                    'Ouvrez Compte → « Entreprises autorisées à m’écrire ».',
+                    'Chaque entreprise dont vous avez débloqué un contact y figure, autorisée ou non. Activez-en une pour l’autoriser, désactivez-la pour l’arrêter.',
+                ],
+                notes: [
+                    'Une entreprise autorisée peut envoyer au plus 3 messages sur 30 jours, dont une demande de la rappeler. Chaque message a un lien pour arrêter les messages, et vos réponses vont sur le WhatsApp de l’entreprise.',
+                ],
+            },
+        },
+    }),
+    T({
+        key: 'servicereview',
+        app: 'shop',
+        path: '/shop/listings',
+        signIn: false,
+        copy: {
+            en: {
+                title: 'Rating a service business',
+                summary: 'Review a business after unlocking one of its contacts',
+                steps: [
+                    'Open the business\'s page and go to "Reviews".',
+                    'Tap "Rate this business". It appears only once you have unlocked one of its contacts; before that the page says "Unlock one of its contacts to rate this business."',
+                    'Choose 1 to 5 stars, optionally add a title and a few words, then tap "Submit".',
+                    'Your review is listed under Account → "My reviews".',
+                ],
+                notes: [
+                    'One review per business ("You’ve reviewed this business."). It is public at once, without your name, and the business is told but cannot reply. Wi-Mall can hide a review that breaks the rules.',
+                ],
+            },
+            fr: {
+                title: 'Noter une entreprise de services',
+                summary: 'Laisser un avis sur une entreprise après avoir débloqué un de ses contacts',
+                steps: [
+                    'Ouvrez la page de l’entreprise et allez à « Avis ».',
+                    'Appuyez sur « Noter cette entreprise ». Le bouton n’apparaît qu’après avoir débloqué un de ses contacts ; avant, la page indique « Débloquez l’un de ses contacts pour noter cette entreprise. »',
+                    'Choisissez de 1 à 5 étoiles, ajoutez si vous voulez un titre et un texte, puis « Valider ».',
+                    'Votre avis est listé dans Compte → « Mes avis ».',
+                ],
+                notes: [
+                    'Un avis par entreprise (« Vous avez déjà noté cette entreprise. »). Il est public tout de suite, sans votre nom ; l’entreprise est prévenue mais ne peut pas répondre. Wi-Mall peut masquer un avis qui enfreint les règles.',
+                ],
+            },
+        },
+    }),
 ]);
 
 /**
@@ -946,6 +1084,7 @@ export const SHOP_GUIDE: readonly GuideTopic[] = Object.freeze([
 export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     ...SHOP_GUIDE,
     ...VENDOR_GUIDE,
+    ...PROVIDER_GUIDE,
     ...AGENCY_GUIDE,
     ...AGENT_GUIDE,
     ...REFERRAL_GUIDE_TOPICS,
@@ -977,7 +1116,7 @@ const APP_LABELS: Readonly<Record<GuideLanguage, Readonly<Record<GuideApp, AppLa
             noSignIn: 'SIGN-IN: not needed.',
         },
         vendor: {
-            name: 'VENDOR DASHBOARD (sellers: vendor.wi-mall.com, or the Wi-Mall Vendor app)',
+            name: 'VENDOR DASHBOARD (sellers and service providers: vendor.wi-mall.com, or the Wi-Mall Vendor app; service-provider topics start "Service provider:")',
             blurb: 'a seller running their store: products, stock, orders, delivery partners, money, plan, notification settings',
             signIn: 'SIGN-IN: needed, on the vendor dashboard with the seller\'s own account (topic vendorsignin). This chat cannot sign them in there and cannot see their dashboard.',
             noSignIn: 'SIGN-IN: not needed.',
@@ -1003,7 +1142,7 @@ const APP_LABELS: Readonly<Record<GuideLanguage, Readonly<Record<GuideApp, AppLa
             noSignIn: 'CONNEXION : pas nécessaire.',
         },
         vendor: {
-            name: 'TABLEAU DE BORD VENDEUR (vendeurs : vendor.wi-mall.com, ou l’app Wi-Mall Vendeur)',
+            name: 'TABLEAU DE BORD VENDEUR (vendeurs et prestataires de services : vendor.wi-mall.com, ou l’app Wi-Mall Vendeur ; les sujets prestataire commencent par « Prestataire de services : »)',
             blurb: 'un vendeur qui gère sa boutique : produits, stock, commandes, partenaires de livraison, argent, forfait, notifications',
             signIn: 'CONNEXION : nécessaire, sur le tableau de bord vendeur avec le compte du vendeur (sujet vendorsignin). Ce chat ne peut pas l’y connecter ni voir son tableau de bord.',
             noSignIn: 'CONNEXION : pas nécessaire.',
